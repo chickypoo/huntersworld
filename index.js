@@ -7,6 +7,8 @@ const client = new Discord.Client();
 
 client.commands = new Discord.Collection();
 
+const actioned = new Set();
+
 fs.readdir(`./commands/`, (err, files) => {
   if(err) console.log(err);
 
@@ -35,7 +37,20 @@ client.on(`message`, message => {
   let args = messageArray.slice(1);
 
   let commandFile = client.commands.get(cmd.slice(botSetting.prefix.length));
-  if(commandFile) commandFile.run(client, message, args);
+  if(actioned.has(message.author.id)){
+    message.reply(`There is a 2 seconds global cooldown for commands.`);
+    return;
+  } else {
+    actioned.add(message.author.id);
+    setTimeout(() => {
+      actioned.delete(message.author.id);
+    }, 2000);
+  }
+
+  if(commandFile){
+    console.log(`${message.author.id} --> ${message.content}`);
+    commandFile.run(client, message, args);
+  }
 });
 
 client.login(botSetting.token);
