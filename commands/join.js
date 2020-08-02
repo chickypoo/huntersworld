@@ -5,7 +5,7 @@ module.exports.help = {
   "name" : "join"
 }
 
-module.exports.run = async(bot, msg, arg) {
+module.exports.run = async(bot, msg, arg) => {
   let id = msg.author.id, db;
 
   sql.dbConnect().then(connection => {
