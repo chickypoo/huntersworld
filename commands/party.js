@@ -43,7 +43,7 @@ module.exports.help = {
 }
 
 module.exports.run = async(bot, msg, arg) => {
-  let id = msg.author.id, db, skip, partyId, partyInfos, recruitees, invitees;
+  let id = msg.author.id, db, skip, partyId, partyInfos, recruitees, invitees, role, targetId, route;
 
   sql.dbConnect().then(connection => {
     db = connection;
@@ -54,11 +54,12 @@ module.exports.run = async(bot, msg, arg) => {
       return;
     }
     //Checks if player is currently in a party. Grab main party ID
-    return db.query(`SELECT party_id FROM party WHERE member_id = '${id}'`);
+    return db.query(`SELECT party_id, role FROM party WHERE member_id = '${id}'`);
   }).then(result => {
     if(skip) return;
     if(result[0]){
       partyId = result[0].party_id;
+      role = result[0].role;
     }
     //Grab all party member informations with the main party ID
     //Returns NULL if player not in party.
@@ -84,11 +85,11 @@ module.exports.run = async(bot, msg, arg) => {
       if(partyInfos){
         //Display all party member's by ID and Role with description of rank, SP, guild
         msg.reply(partyListEmbed(partyInfos, id));
-        return;
+        return skip = true;
       } else{
         //Player not in active party
         msg.reply(`You are not in any party.`);
-        return;
+        return skip = true;
       }
     } else if(arg.length === 1){
       //Create / Recruit / Leave / Info
@@ -101,34 +102,142 @@ module.exports.run = async(bot, msg, arg) => {
           } else {
             //Player is in a party, unable to create
             msg.reply(`You are already in a party. Unable to create a new one.`);
-            return;
+            return skip = true;
           }
         case 'recruit' :
           //All members can view the recruitment list if in a party
           if(recruitees && partyId){
             //Display all valid candidates in a chart form
             msg.reply(recruitListChart(recruitees));
-            return;
+            return skip = true;
           } else if(partyId){
             //No current candidate
             msg.reply(`There are no players in the recruitment list.`);
-            return;
+            return skip = true;
           } else {
             //Not in party
             msg.reply(`You are not in any party.`);
-            return;
+            return skip = true;
           }
         case 'leave' :
+          //Player can only leave party if currently in party
+          //If player is the leader of the party, it will be transfered to random elite then recruit
+          //Party ID is then changed to the new leader, changing all invitation party ID to the new one
         case '?' :
+          //Display party help view
+          msg.reply(descEmbed);
+          return skip = true;
       }
     } else if(arg.length === 2){
       //Add / Kick / Join / Promote / Demote / Transfer
+      switch(arg[0].toLowerCase()){
+        case 'add' :
+          //Leader and Elite can add (send invites) to other player to join party
+          //If the receipient has invitation matching to the party ID, it auto joins the party
+          //Can only add if the party is not full
+        case 'kick' :
+          //Leader and Elite can kick other player with lower role power from the party
+          //Player cannot kick themself from the party, use the leave command instead
+        case 'promote' :
+        case 'demote' :
+          //Leader and Elite can promote other members of party up to Elite or demote other members of party down to Recruit with lesser priority.
+          //Leader cannot be promoted / demoted
+          //Can only promote up to role before and can only demote from role before
+          if(partyId && (role == `Leader` || role == `Elite`)){
+            //Determine the tag to see if valid player and ID
+            targetId = isIdValid(arg[1]);
+            if(!targetId){
+              //Bad argument
+              msg.reply(`You have entered a bad ID. Valid ID is either by Tag like <@${id}> or ${id}.`);
+            } else {
+              //Send query to check if the target player is in system and not in party
+              if(arg[0].toLowerCase() == `add`)
+                route = `PARTY ADD`;
+              else if(arg[0].toLowerCase() == `kick`)
+                route = `PARTY KICK`;
+              else if(arg[0].toLowerCase() == `promote`)
+                route = `PARTY PROMOTE`; 
+              else
+                route = `PARTY DEMOTE`;
+              return db.query(`SELECT role FROM party WHERE member_id = '${targetId}' AND party_id = '${partyId}'`);
+            }
+          } else if(partyId){
+            //Not enough power (Player is a Recruit or Trusted)
+            msg.reply(`You do not have enough power to do that (Only Leader and Elite can ${arg[0].toLowerCase()} other member).`);
+          } else {
+            //Not in party
+            msg.reply(`You are not in any party.`);
+          }
+          return skip = true;
+        case 'transfer' :
+          //Only Leader can transfer leadship of party to other member of party
+          //The leader is then repositioned as Elite
+          if(partyId && role == `Leader` && (id !== isIdValid(arg[1]))){
+            //Determine the tag to see if valid player and ID
+            targetId = isIdValid(arg[1]);
+            if(!targetId){
+              //Bad argument
+              msg.reply(`You have entered a bad ID. Valid ID is either by Tag like <@${id}> or ${id}.`);
+            } else {
+              route = `PARTY TRANSFER`;
+              return db.query(`SELECT role FROM party WHERE member_id = '${targetId}' AND party_id = '${id}'`);
+            }
+          } else if(partyId && role == `Leader`){
+            //Leader is trying to transfer leadship back to self
+            msg.reply(`You are trying to transfer the party leadership back to yourself.`);
+          }else if(partyId){
+            //Player is not the leader of party
+            msg.reply(`You are not the leader of this party.`);
+          } else {
+            //Not in party
+            msg.reply(`You are not in any party.`);
+          }
+          return skip = true;
+        case 'join' :
+          //Only nonparty member can apply for a party
+          //Auto joins the party if party has live invitation to player
+          if(!partyId){
+            //Player is not in party and is able to apply and the ID given is valid
+            //Find the owner of the party and sends it to them
+            targetId = isIdValid(arg[1]);
+            if(!targetId){
+              //Bad argument
+              msg.reply(`You have entered a bad ID. Valid ID is either by Tag like <@${id}> or ${id}.`);
+            } else {
+              //Look for the party ID of the target's party
+              return db.query(`SELECT party_id FROM party WHERE member_id = '${targetId}' OR party_id = '${targetId}'`);
+            }
+          } else {
+            //Player is in a party, unable to send application
+            msg.reply(`You are in an active party. Unable to send party application.`);
+          }
+          return skip = true;
+      }
     }
     return;
   }).catch(err => {
     if(db && db.end) db.end();
     console.log(err);
   });
+}
+
+/* This checks if the argument passed is a valid ID
+ * ID is in snowflake 64-bit, represented in numeric format as string
+ * Returns string of numbers if valid, NULL else
+ */
+const isIdValid(testId){
+  //Valid case are: "123456789" or "<@!123456789>", returns "123456789"
+  if(!isNaN(testId)){
+    //Case 1 : "123456789"
+    return testId;
+  } else if(testId.startsWith(`<@`) && testId.endsWith(`>`)){
+    //Case 2 : "<@!123456789>"
+    let iStart = testId.indexOf(testId.match(/[0-9]/g).shift());
+    let iEnd = testId.lastIndexOf(testId.match(/[0-9]/g).pop());
+    if(!isNaN(testId.substring(iStart, iEnd + 1)))
+      return testId.substring(iStart, iEnd + 1);
+  }
+  return null;
 }
 /* This construct a codeblock chart that displays recruitees' ID, skill point level, and rank
  * This is used by <>PARTY RECRUIT
@@ -178,11 +287,11 @@ const partyListEmbed = (infos, pid) => {
 /* This construct an embed that shows all available command for the [Party].
  * This is used by <>PARTY ?
  */
-const desc = () => {
+const descEmbed = () => {
   const embed = new Discord.MessageEmbed()
     .setTitle(`Party Description`)
     .setColor([102, 153, 255])
-    .setDescription(`Party allows multiple players to partake in hunting and bossing.\nMaximum party members allowed is 5.`)
+    .setDescription(`Party allows multiple players to partake in hunting and bossing.\nMaximum party members allowed is 10.`)
     .setTimestamp()
     .addField(`Default`, `Usage: ${settings.prefix}party\nThis shows your current party, roles and total skill point used.`)
     .addField(`Create`, `Usage: ${settings.prefix}party create\nThis creates a party with you as leader.`)
